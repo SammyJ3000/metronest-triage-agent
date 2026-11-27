@@ -57,6 +57,23 @@ function emptyStore(firstActivity) {
 const storeFile = createStore(STORE_PATH, () => emptyStore("Demo workspace initialized."));
 const writeStore = storeFile.write;
 
+// Runs tasks with the same key one after another; different keys run independently.
+const queues = new Map();
+function runInQueue(key, task) {
+  const run = (queues.get(key) || Promise.resolve()).then(task);
+  const settled = run.catch(() => {});
+  queues.set(key, settled);
+  settled.then(() => {
+    if (queues.get(key) === settled) queues.delete(key);
+  });
+  return run;
+}
+
+// Every read, change and write of the store runs under this lock, so simultaneous
+// approvals cannot overwrite each other. Model calls never run inside it.
+const withStoreLock = (task) => runInQueue("store", task);
+const inChatQueue = (sessionId, task) => runInQueue(`chat:${sessionId}`, task);
+
 async function readStore() {
   const data = await storeFile.read();
   data.landlordSettings = { ...defaultLandlordSettings, ...(data.landlordSettings || {}) };
@@ -144,8 +161,7 @@ function summarizeRequests(requests) {
   return { open, urgent, ready, pending, total: requests.length };
 }
 
-async function handleChat(req, res) {
-  const payload = await parseJson(req);
+async function handleChat(payload, res) {
   const message = String(payload.message || "").trim();
   const sessionId = String(payload.sessionId || "demo-tenant");
 
@@ -154,21 +170,27 @@ async function handleChat(req, res) {
     return;
   }
 
-  const store = await readStore();
-  const session = store.sessions[sessionId] || createInitialSession(sessionId);
-  const result = await processTenantMessage(session, message, {
-    tenantProfile: await getDefaultTenantProfile(),
+  // One message at a time per chat, so a tenant's messages are handled in order.
+  await inChatQueue(sessionId, async () => {
+    const saved = await readStore();
+    const session = saved.sessions[sessionId] || createInitialSession(sessionId);
+    // The model call can take seconds, so it runs outside the store lock.
+    const result = await processTenantMessage(session, message, {
+      tenantProfile: await getDefaultTenantProfile(),
+    });
+
+    // Merge into the latest store, which dashboard actions may have changed meanwhile.
+    await withStoreLock(async () => {
+      const store = await readStore();
+      store.sessions[sessionId] = result.session;
+      if (result.request) {
+        upsertRequest(store, result.request);
+        logActivity(store, "request", `${result.request.urgency} ${result.request.category.toLowerCase()} work order created for ${result.request.address || "unknown address"}.`);
+      }
+      await writeStore(store);
+    });
+    sendJson(res, 200, result);
   });
-
-  store.sessions[sessionId] = result.session;
-
-  if (result.request) {
-    upsertRequest(store, result.request);
-    logActivity(store, "request", `${result.request.urgency} ${result.request.category.toLowerCase()} work order created for ${result.request.address || "unknown address"}.`);
-  }
-
-  await writeStore(store);
-  sendJson(res, 200, result);
 }
 
 async function handleRequests(req, res) {
@@ -181,8 +203,7 @@ async function handleRequests(req, res) {
   });
 }
 
-async function handleSettingsPatch(req, res) {
-  const payload = await parseJson(req);
+async function handleSettingsPatch(payload, res) {
   if (!Number.isFinite(Number(payload.autoAcceptLimit)) || Number(payload.autoAcceptLimit) < 100) {
     return sendError(res, 400, "Quote limit must be at least £100.");
   }
@@ -197,8 +218,7 @@ async function handleSettingsPatch(req, res) {
   sendJson(res, 200, { landlordSettings: store.landlordSettings });
 }
 
-async function handleRequestPatch(req, res, requestId) {
-  const payload = await parseJson(req);
+async function handleRequestPatch(payload, res, requestId) {
   const store = await readStore();
   const request = store.requests.find((item) => item.id === requestId);
   if (!request) {
@@ -222,7 +242,7 @@ function buildContractorMessage(request, vendor) {
   return `WhatsApp to ${vendor.name}: Maintenance request ${request.reference}: ${request.urgency} ${request.category.toLowerCase()} issue at ${request.address || "address pending"}. Tenant notes: ${request.issueDescription || "No detail provided"}. Active risk: ${request.activeRisk || "Not confirmed"}. Photos: ${request.photoStatus || "Not provided"}. Access: ${request.accessPermission || "Confirm with tenant"}. Please reply with accept/decline, ETA, and quote.`;
 }
 
-async function handleDispatchContractors(req, res, requestId) {
+async function handleDispatchContractors(res, requestId) {
   const store = await readStore();
   const request = store.requests.find((item) => item.id === requestId);
   if (!request) {
@@ -266,8 +286,7 @@ async function handleDispatchContractors(req, res, requestId) {
   sendJson(res, 200, { request });
 }
 
-async function handleContractorResponse(req, res, requestId) {
-  const payload = await parseJson(req);
+async function handleContractorResponse(payload, res, requestId) {
   const store = await readStore();
   const request = store.requests.find((item) => item.id === requestId);
   const dispatch = request?.contractorDispatches?.find((item) => item.id === payload.dispatchId);
@@ -315,8 +334,7 @@ async function handleContractorResponse(req, res, requestId) {
   sendJson(res, 200, { request });
 }
 
-async function handleConfirmContractor(req, res, requestId) {
-  const payload = await parseJson(req);
+async function handleConfirmContractor(payload, res, requestId) {
   const store = await readStore();
   const request = store.requests.find((item) => item.id === requestId);
   const dispatch = request?.contractorDispatches?.find((item) => item.id === payload.dispatchId);
@@ -357,7 +375,7 @@ function confirmDispatch(request, dispatch, confirmationMode) {
   });
 }
 
-async function handleReset(req, res) {
+async function handleReset(res) {
   const store = await readStore();
   store.sessions["demo-tenant"] = resetSession("demo-tenant");
   logActivity(store, "system", "Tenant chat simulator reset.");
@@ -365,7 +383,7 @@ async function handleReset(req, res) {
   sendJson(res, 200, { session: store.sessions["demo-tenant"] });
 }
 
-async function handleResetDemo(req, res) {
+async function handleResetDemo(res) {
   await writeStore(emptyStore("Demo data cleared."));
   sendJson(res, 200, { ok: true });
 }
@@ -375,24 +393,36 @@ async function router(req, res) {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     if (req.method === "GET" && url.pathname === "/api/health") return sendJson(res, 200, { ok: true, service: "metronest", llm: llmStatus() });
-    if (req.method === "POST" && url.pathname === "/api/chat") return await handleChat(req, res);
-    if (req.method === "POST" && url.pathname === "/api/reset-chat") return await handleReset(req, res);
-    if (req.method === "POST" && url.pathname === "/api/reset-demo") return await handleResetDemo(req, res);
+    if (req.method === "POST" && url.pathname === "/api/chat") return await handleChat(await parseJson(req), res);
+    if (req.method === "POST" && url.pathname === "/api/reset-chat") return await withStoreLock(() => handleReset(res));
+    if (req.method === "POST" && url.pathname === "/api/reset-demo") return await withStoreLock(() => handleResetDemo(res));
     if (req.method === "GET" && url.pathname === "/api/requests") return await handleRequests(req, res);
-    if (req.method === "PATCH" && url.pathname === "/api/settings") return await handleSettingsPatch(req, res);
+    if (req.method === "PATCH" && url.pathname === "/api/settings") {
+      const payload = await parseJson(req);
+      return await withStoreLock(() => handleSettingsPatch(payload, res));
+    }
     if (req.method === "GET" && url.pathname === "/api/vendors") return sendJson(res, 200, { vendors: getVendors() });
 
     const requestMatch = url.pathname.match(/^\/api\/requests\/([^/]+)$/);
-    if (requestMatch && req.method === "PATCH") return await handleRequestPatch(req, res, requestMatch[1]);
+    if (requestMatch && req.method === "PATCH") {
+      const payload = await parseJson(req);
+      return await withStoreLock(() => handleRequestPatch(payload, res, requestMatch[1]));
+    }
 
     const dispatchMatch = url.pathname.match(/^\/api\/requests\/([^/]+)\/dispatch$/);
-    if (dispatchMatch && req.method === "POST") return await handleDispatchContractors(req, res, dispatchMatch[1]);
+    if (dispatchMatch && req.method === "POST") return await withStoreLock(() => handleDispatchContractors(res, dispatchMatch[1]));
 
     const responseMatch = url.pathname.match(/^\/api\/requests\/([^/]+)\/contractor-response$/);
-    if (responseMatch && req.method === "POST") return await handleContractorResponse(req, res, responseMatch[1]);
+    if (responseMatch && req.method === "POST") {
+      const payload = await parseJson(req);
+      return await withStoreLock(() => handleContractorResponse(payload, res, responseMatch[1]));
+    }
 
     const confirmMatch = url.pathname.match(/^\/api\/requests\/([^/]+)\/confirm-contractor$/);
-    if (confirmMatch && req.method === "POST") return await handleConfirmContractor(req, res, confirmMatch[1]);
+    if (confirmMatch && req.method === "POST") {
+      const payload = await parseJson(req);
+      return await withStoreLock(() => handleConfirmContractor(payload, res, confirmMatch[1]));
+    }
 
     if (req.method === "GET") return await serveStatic(req, res);
     notFound(res);
@@ -404,15 +434,7 @@ async function router(req, res) {
 }
 
 await storeFile.ensure();
-// Serialize dashboard mutations so simultaneous approvals cannot overwrite each other.
-let mutationQueue = Promise.resolve();
-const server = http.createServer((req, res) => {
-  if (["POST", "PATCH", "DELETE"].includes(req.method)) {
-    mutationQueue = mutationQueue.then(() => router(req, res));
-  } else {
-    router(req, res);
-  }
-});
+const server = http.createServer(router);
 
 function listen(port, attempts = 0) {
   const onError = (error) => {

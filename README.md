@@ -76,7 +76,9 @@ These come from the project's own run logs.
 
 **A new problem was added to an old report.** A saved Telegram chat was still waiting for photos on an earlier power cut. A new "I have an issue" message carried on that old report and asked the saved access question first. Now phrases like "I have an issue" or "start again" open a fresh report. Old work orders and the tenant profile stay, but risk, access and photos do not carry over. The issue description is now always the first thing asked.
 
-**Two contractors could be confirmed at once.** Server changes now run one at a time, and the store file is replaced in one step so a read never sees half a file. The server test fires two confirmations together and expects one to succeed and one to be refused.
+**Two contractors could be confirmed at once.** Changes to the store now run one at a time, and the store file is replaced in one step so a read never sees half a file. The server test fires two confirmations together and expects one to succeed and one to be refused.
+
+**A slow model reply held up the dashboard.** My first fix for the double confirmation queued every POST, including tenant chat, which waits on the model. A slow reply then held up every approval behind it. Now only the store reads and writes are queued. The model call runs outside the queue and its result is merged into the latest store. A test stands in a model that takes 1.5 seconds and checks that a settings change goes through first.
 
 **Smaller fixes.** Resolved jobs were still counted as active. The default port was already taken by another server, so the server now tries the next free port and prints the one it used.
 

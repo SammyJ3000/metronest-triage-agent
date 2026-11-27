@@ -11,9 +11,32 @@ import { createInitialSession, processTenantMessage } from "./triage-engine.mjs"
 // Starts its own server on a free port with a temporary store, so demo data is never touched.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let directory;
-let child;
+let server;
 let base;
 let request;
+
+// Starts server.mjs on a free port and resolves once it prints its address.
+async function startServer(storePath, extraEnv = {}, nodeArgs = []) {
+  const child = spawn(process.execPath, [...nodeArgs, "server.mjs"], {
+    cwd: root,
+    env: { ...process.env, PORT: "0", METRONEST_STORE_PATH: storePath, METRONEST_LLM_ENABLED: "false", METRONEST_DEMO_TEXT_PHOTOS: "0", ...extraEnv },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const address = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Server did not start")), 10000);
+    child.stdout.on("data", (chunk) => {
+      const match = String(chunk).match(/http:\/\/127\.0\.0\.1:\d+/);
+      if (match) { clearTimeout(timer); resolve(match[0]); }
+    });
+    child.on("error", reject);
+  });
+  const stop = async () => {
+    if (child.exitCode !== null) return;
+    child.kill();
+    await new Promise((resolve) => child.once("exit", resolve));
+  };
+  return { base: address, stop };
+}
 
 async function call(url, method = "GET", payload) {
   const response = await fetch(`${base}${url}`, {
@@ -37,26 +60,12 @@ before(async () => {
     sessions: {}, requests: [request], activity: [],
     landlordSettings: { autoAcceptUrgent: false, autoAcceptLimit: 650, reviewRoutineQuotes: true },
   }));
-  child = spawn(process.execPath, ["server.mjs"], {
-    cwd: root,
-    env: { ...process.env, PORT: "0", METRONEST_STORE_PATH: storePath, METRONEST_LLM_ENABLED: "false", METRONEST_DEMO_TEXT_PHOTOS: "0" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  base = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Server did not start")), 10000);
-    child.stdout.on("data", (chunk) => {
-      const match = String(chunk).match(/http:\/\/127\.0\.0\.1:\d+/);
-      if (match) { clearTimeout(timer); resolve(match[0]); }
-    });
-    child.on("error", reject);
-  });
+  server = await startServer(storePath);
+  base = server.base;
 });
 
 after(async () => {
-  if (child && child.exitCode === null) {
-    child.kill();
-    await new Promise((resolve) => child.once("exit", resolve));
-  }
+  if (server) await server.stop();
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 
@@ -132,4 +141,40 @@ test("a request body over 1 MB is refused with 413", async () => {
   });
   assert.equal(chunkedStatus, 413);
   assert.equal((await call("/api/health")).status, 200);
+});
+
+test("a slow model reply does not hold up dashboard actions", async () => {
+  const slow = await startServer(path.join(directory, "slow-model-store.json"), {
+    OPENAI_API_KEY: "test-only",
+    METRONEST_LLM_ENABLED: "true",
+    SLOW_MODEL_DELAY_MS: "1500",
+  }, ["--import", "./executions/fixtures/slow-model.mjs"]);
+  try {
+    const finished = [];
+    const send = (url, method, payload) => fetch(`${slow.base}${url}`, {
+      method, headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+    }).then(async (response) => {
+      finished.push(url);
+      return { status: response.status, data: await response.json() };
+    });
+
+    const chat = send("/api/chat", "POST", { sessionId: "slow", message: "The kitchen sink is leaking" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const started = Date.now();
+    const settings = await send("/api/settings", "PATCH", { autoAcceptUrgent: false, autoAcceptLimit: 400 });
+    assert.equal(settings.status, 200);
+    assert.ok(Date.now() - started < 1000, "Settings waited for the model call");
+
+    const chatReply = await chat;
+    assert.deepEqual(finished, ["/api/settings", "/api/chat"]);
+    assert.equal(chatReply.status, 200);
+    assert.equal(chatReply.data.session.replyMode, "rules");
+
+    // The chat merged into the latest store, so the settings change is kept.
+    const saved = await fetch(`${slow.base}/api/requests`).then((response) => response.json());
+    assert.equal(saved.landlordSettings.autoAcceptLimit, 400);
+    assert.equal(saved.requests.length, 1);
+  } finally {
+    await slow.stop();
+  }
 });
