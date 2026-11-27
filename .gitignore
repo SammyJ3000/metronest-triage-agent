@@ -1,0 +1,19 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local demo data written by the server and bot
+data/*
+!data/.gitkeep
+
+# Screenshots and scratch output
+tmp/
+logs/
+
+# Node
+node_modules/
+
+# OS/editor
+.DS_Store
+*.swp

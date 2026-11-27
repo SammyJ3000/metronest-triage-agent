@@ -1,0 +1,39 @@
+[
+  {
+    "id": "jamie-example",
+    "name": "Jamie Example",
+    "building": "Example House",
+    "unit": "Flat 2",
+    "address": "Flat 2, 14 Example Street, Demo Town",
+    "landlord": "Chris Sample",
+    "propertyManager": "MetroNest Property Management",
+    "accessNotes": "Usually home after 2pm on weekdays. Contractor should message before arrival.",
+    "preferredContact": "Telegram",
+    "demoDefault": true,
+    "telegramChatIds": []
+  },
+  {
+    "id": "riley-sample",
+    "name": "Riley Sample",
+    "building": "Example House",
+    "unit": "Flat 5",
+    "address": "Flat 5, 14 Example Street, Demo Town",
+    "landlord": "Dana Example",
+    "propertyManager": "MetroNest Property Management",
+    "accessNotes": "Works from home Monday and Friday. No contractor access without confirmation.",
+    "preferredContact": "Telegram",
+    "telegramChatIds": []
+  },
+  {
+    "id": "morgan-placeholder",
+    "name": "Morgan Placeholder",
+    "building": "Sample Court",
+    "unit": "Flat 3",
+    "address": "Flat 3, 22 Sample Road, Demo Town",
+    "landlord": "Lee Placeholder",
+    "propertyManager": "MetroNest Property Management",
+    "accessNotes": "Key safe available after manager approval.",
+    "preferredContact": "Telegram",
+    "telegramChatIds": []
+  }
+]
