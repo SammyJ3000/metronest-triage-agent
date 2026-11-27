@@ -43,7 +43,3 @@ Expected triage:
 - Urgency: Emergency
 - Vendor: BrightSpark Electrical
 - Risk: Immediate safety risk
-
-## Content Hook
-
-"I built an AI maintenance bot that turns messy tenant messages into work orders for property managers."
