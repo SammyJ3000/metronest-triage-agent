@@ -145,7 +145,7 @@ async function loadDashboard() {
   } catch (error) {
     connection.textContent = "Reconnecting";
     connection.dataset.connected = "false";
-    throw new Error("Can't reach MetroNest. Check the server is running, then refresh.");
+    throw new Error("Can't reach MetroNest. Check the server is running, then refresh.", { cause: error });
   } finally {
     loading = false;
   }
@@ -612,6 +612,7 @@ function escapeHtml(value) {
 
 setView("dashboard");
 await Promise.allSettled([loadDashboard().catch(showError), loadVendors().catch(showError)]);
+// Background refresh. A failed poll already shows "Reconnecting" and is retried on the next tick.
 setInterval(() => {
   if (!document.hidden && !busy) loadDashboard().catch(() => {});
 }, 5000);

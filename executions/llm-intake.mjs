@@ -56,13 +56,19 @@ When the report is complete, say it is ready for manager review. Do not promise 
 If you cannot understand after clarification, or the tenant asks for a person, set needsHumanReview.
 For dangerous reports flag urgency for a person; do not give repair instructions or reassurance that a hazard is safe.`;
 
+const DEFAULT_MODEL = "gpt-4.1-mini";
+const TIMEOUT_MS = 15000;
+const MAX_OUTPUT_TOKENS = 1400;
+const MAX_FIELD_CHARS = 4000;
+const MAX_REPLY_CHARS = 1200;
+
 let lastCall = { status: "not_used", checkedAt: null };
 
 export function llmStatus() {
   return {
     configured: Boolean(process.env.OPENAI_API_KEY?.trim()),
     enabled: process.env.METRONEST_LLM_ENABLED !== "false",
-    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+    model: process.env.OPENAI_MODEL || DEFAULT_MODEL,
     ...lastCall,
   };
 }
@@ -74,13 +80,13 @@ export async function interpretIntake(context, options = {}) {
     const response = await (options.fetchImpl || fetch)("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      signal: AbortSignal.timeout(options.timeoutMs || 15000),
+      signal: AbortSignal.timeout(options.timeoutMs || TIMEOUT_MS),
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+        model: process.env.OPENAI_MODEL || DEFAULT_MODEL,
         store: false,
         instructions,
         input: JSON.stringify(context),
-        max_output_tokens: 1400,
+        max_output_tokens: MAX_OUTPUT_TOKENS,
         text: { format: { type: "json_schema", name: "maintenance_intake", strict: true, schema } },
       }),
     });
@@ -106,11 +112,11 @@ export async function interpretIntake(context, options = {}) {
 }
 
 function validateInterpretation(value) {
-  const validText = (text) => text === null || (typeof text === "string" && text.length <= 4000);
+  const validText = (text) => text === null || (typeof text === "string" && text.length <= MAX_FIELD_CHARS);
   if (!value || !value.fields || fieldNames.some((field) => !validText(value.fields[field]))
       || !accessActions.includes(value.access?.action) || !validText(value.access?.evidence)
       || !questionFields.includes(value.nextQuestion)
-      || typeof value.reply !== "string" || !value.reply.trim() || value.reply.length > 1200
+      || typeof value.reply !== "string" || !value.reply.trim() || value.reply.length > MAX_REPLY_CHARS
       || typeof value.needsHumanReview !== "boolean") {
     throw new Error("INVALID_OUTPUT");
   }

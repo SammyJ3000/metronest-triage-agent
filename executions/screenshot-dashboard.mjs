@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
 
-const baseUrl = process.env.DASHBOARD_URL || "http://127.0.0.1:4174";
+const baseUrl = process.env.DASHBOARD_URL || "http://127.0.0.1:4173";
 const outputPath = process.argv[2] || "tmp/dashboard-screenshot.png";
 const pagePath = process.env.SCREENSHOT_PATH || "/dashboard.html";
 const [viewportWidth, viewportHeight] = (process.env.SCREENSHOT_VIEWPORT || "1440x1020")

@@ -1,21 +1,17 @@
-import {
-  createInitialSession,
-  processTenantMessage,
-  mergeWorkOrder,
-} from "./triage-engine.mjs";
-import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createInitialSession, processTenantMessage } from "./triage-engine.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnv } from "./env.mjs";
 import { llmStatus } from "./llm-intake.mjs";
+import { createStore, loadTenantDirectory, logActivity, upsertRequest } from "./store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
-const DATA_DIR = path.join(ROOT, "data");
-const STORE_PATH = path.join(DATA_DIR, "maintenance-store.json");
+const STORE_PATH = path.join(ROOT, "data", "maintenance-store.json");
 const TENANT_DIRECTORY_PATH = path.join(ROOT, "resources", "tenant-directory.json");
+const POLL_TIMEOUT_SECONDS = 25;
+const TYPING_REFRESH_MS = 4000;
+const RETRY_DELAY_MS = 3000;
 
 await loadEnv(path.join(ROOT, ".env"));
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -27,31 +23,10 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-async function ensureStore() {
-  await mkdir(DATA_DIR, { recursive: true });
-  if (!existsSync(STORE_PATH)) {
-    await writeStore({ sessions: {}, requests: [], activity: [] });
-  }
-}
-
-async function readStore() {
-  await ensureStore();
-  return JSON.parse(await readFile(STORE_PATH, "utf8"));
-}
-
-async function writeStore(store) {
-  const temporary = `${STORE_PATH}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(store, null, 2)}\n`);
-  await rename(temporary, STORE_PATH);
-}
-
-async function loadTenantDirectory() {
-  if (!existsSync(TENANT_DIRECTORY_PATH)) return [];
-  return JSON.parse(await readFile(TENANT_DIRECTORY_PATH, "utf8"));
-}
+const { read: readStore, write: writeStore } = createStore(STORE_PATH, () => ({ sessions: {}, requests: [], activity: [] }));
 
 async function findTenantProfile(chatId) {
-  const tenants = await loadTenantDirectory();
+  const tenants = await loadTenantDirectory(TENANT_DIRECTORY_PATH);
   const chatIdText = String(chatId);
   return tenants.find((tenant) => (tenant.telegramChatIds || []).map(String).includes(chatIdText))
     || tenants.find((tenant) => tenant.demoDefault)
@@ -100,7 +75,7 @@ while (true) {
   try {
     const updates = await telegram("getUpdates", {
       offset,
-      timeout: 25,
+      timeout: POLL_TIMEOUT_SECONDS,
       allowed_updates: ["message"],
     });
 
@@ -128,9 +103,10 @@ while (true) {
       const session = store.sessions[sessionId] || createInitialSession(sessionId);
       const tenantProfile = await findTenantProfile(chatId);
       await telegram("sendChatAction", { chat_id: chatId, action: "typing" });
+      // The typing indicator is cosmetic: a failed refresh must not interrupt the reply.
       const typing = setInterval(() => {
         telegram("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
-      }, 4000);
+      }, TYPING_REFRESH_MS);
       let result;
       try {
         result = await processTenantMessage(session, text, {
@@ -146,23 +122,14 @@ while (true) {
       // Model requests may take seconds; merge into the latest dashboard state.
       const latest = await readStore();
       latest.sessions[sessionId] = result.session;
-      if (result.request) {
-        const existingIndex = latest.requests.findIndex((request) => request.id === result.request.id);
-        if (existingIndex >= 0) latest.requests[existingIndex] = mergeWorkOrder(latest.requests[existingIndex], result.request);
-        else latest.requests.unshift(result.request);
-      }
-      latest.activity.unshift({
-        id: randomUUID(),
-        timestamp: new Date().toISOString(),
-        type: "telegram",
-        text: `Telegram intake updated for chat ${chatId}.`,
-      });
+      if (result.request) upsertRequest(latest, result.request);
+      logActivity(latest, "telegram", `Telegram intake updated for chat ${chatId}.`);
       await writeStore(latest);
 
       await sendHumanReply(chatId, result.reply);
     }
   } catch (error) {
     console.error(error.message);
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await sleep(RETRY_DELAY_MS);
   }
 }

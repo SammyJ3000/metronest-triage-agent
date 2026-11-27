@@ -1,5 +1,7 @@
 # MetroNest: property maintenance triage agent
 
+[![CI](https://github.com/SammyJ3000/metronest-triage-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/SammyJ3000/metronest-triage-agent/actions/workflows/ci.yml)
+
 I built MetroNest as a demo of an AI agent that takes a tenant's repair message and turns it into a work order a property manager can act on. It is a portfolio piece, not a live client product. MetroNest is a made up company. Every tenant, landlord, address, contractor and phone number in this repo is fictional.
 
 ## What it is
@@ -127,7 +129,14 @@ DASHBOARD_URL=http://127.0.0.1:4173 node executions/screenshot-dashboard.mjs
 npm test
 ```
 
-This runs `triage-engine.test.mjs`, `server.test.mjs` and `llm-intake.test.mjs`. The server test starts its own copy of the server on a free port with a temporary store, so it does not touch your demo data. No test makes a network call to OpenAI or Telegram, and none needs a key. The "LLM intake fallback" lines in the output are expected; they come from the tests that check failure handling.
+This runs `triage-engine.test.mjs`, `server.test.mjs` and `llm-intake.test.mjs`. The tests need no install. The server test starts its own copy of the server on a free port with a temporary store, so it does not touch your demo data. No test makes a network call to OpenAI or Telegram, and none needs a key. The "LLM intake fallback" lines in the output are expected; they come from the tests that check failure handling.
+
+```bash
+npm install
+npm run lint
+```
+
+`npm run lint` checks the code with ESLint, which is a dev dependency. GitHub Actions runs the lint and the tests on every push and pull request.
 
 ## Project layout
 
@@ -137,6 +146,7 @@ public/                        landlord dashboard and product page
 executions/triage-engine.mjs   rules based intake and triage
 executions/llm-intake.mjs      OpenAI adapter with schema and checks
 executions/telegram-polling-bot.mjs
+executions/store.mjs           the JSON store, shared by the server and the bot
 executions/env.mjs             loads .env
 executions/*.test.mjs          tests
 resources/                     fictional tenants and demo scenarios
@@ -146,7 +156,7 @@ planning/                      scope and dashboard notes
 
 ## Stack
 
-Node.js with no runtime dependencies, plain HTML, CSS and JavaScript for the dashboard, the OpenAI Responses API for intake, the Telegram Bot API for tenant chat, and a JSON file for storage. Playwright is only used for screenshots.
+Node.js with no runtime dependencies, plain HTML, CSS and JavaScript for the dashboard, the OpenAI Responses API for intake, the Telegram Bot API for tenant chat, and a JSON file for storage. Playwright is only used for screenshots, and ESLint for linting.
 
 ## About me
 

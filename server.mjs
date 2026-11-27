@@ -1,28 +1,32 @@
 import http from "node:http";
-import { readFile, writeFile, mkdir, rename, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { existsSync, createReadStream } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnv } from "./executions/env.mjs";
 import { llmStatus } from "./executions/llm-intake.mjs";
+import { activityEntry, createStore, loadTenantDirectory, logActivity, upsertRequest } from "./executions/store.mjs";
 import {
   createInitialSession,
   processTenantMessage,
   getVendors,
   getTopVendorsForCategory,
   resetSession,
-  mergeWorkOrder,
 } from "./executions/triage-engine.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 await loadEnv(path.join(__dirname, ".env"));
 const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "127.0.0.1";
-const DATA_DIR = path.join(__dirname, "data");
-const STORE_PATH = process.env.METRONEST_STORE_PATH || path.join(DATA_DIR, "maintenance-store.json");
+const STORE_PATH = process.env.METRONEST_STORE_PATH || path.join(__dirname, "data", "maintenance-store.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const TENANT_DIRECTORY_PATH = path.join(__dirname, "resources", "tenant-directory.json");
+// If the port is taken, try the next ones up to this many times.
+const PORT_ATTEMPTS = 20;
+const ACTIVITY_SHOWN = 12;
+const URGENT_LEVELS = ["Emergency", "High"];
+const OPEN_DISPATCH_STATUSES = ["Contacted", "Prepared", "Accepted"];
 
 const defaultLandlordSettings = {
   autoAcceptUrgent: false,
@@ -39,37 +43,25 @@ const contentTypes = {
   ".png": "image/png",
 };
 
-async function ensureStore() {
-  await mkdir(DATA_DIR, { recursive: true });
-  if (!existsSync(STORE_PATH)) {
-    await writeStore({
-      sessions: {},
-      requests: [],
-      landlordSettings: defaultLandlordSettings,
-      activity: [
-        {
-          id: randomUUID(),
-          timestamp: new Date().toISOString(),
-          type: "system",
-          text: "Demo workspace initialized.",
-        },
-      ],
-    });
-  }
+function emptyStore(firstActivity) {
+  return {
+    sessions: {},
+    requests: [],
+    landlordSettings: defaultLandlordSettings,
+    activity: [activityEntry("system", firstActivity)],
+  };
 }
+
+const storeFile = createStore(STORE_PATH, () => emptyStore("Demo workspace initialized."));
+const writeStore = storeFile.write;
 
 async function readStore() {
-  await ensureStore();
-  const store = JSON.parse(await readFile(STORE_PATH, "utf8"));
-  store.landlordSettings = { ...defaultLandlordSettings, ...(store.landlordSettings || {}) };
-  return store;
+  const data = await storeFile.read();
+  data.landlordSettings = { ...defaultLandlordSettings, ...(data.landlordSettings || {}) };
+  return data;
 }
 
-async function writeStore(store) {
-  const temporary = `${STORE_PATH}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(store, null, 2)}\n`);
-  await rename(temporary, STORE_PATH);
-}
+const isUrgent = (request) => URGENT_LEVELS.includes(request.urgency);
 
 async function parseJson(req) {
   let body = "";
@@ -78,13 +70,8 @@ async function parseJson(req) {
   return JSON.parse(body);
 }
 
-async function loadTenantDirectory() {
-  if (!existsSync(TENANT_DIRECTORY_PATH)) return [];
-  return JSON.parse(await readFile(TENANT_DIRECTORY_PATH, "utf8"));
-}
-
 async function getDefaultTenantProfile() {
-  const tenants = await loadTenantDirectory();
+  const tenants = await loadTenantDirectory(TENANT_DIRECTORY_PATH);
   return tenants.find((tenant) => tenant.demoDefault) || tenants[0] || null;
 }
 
@@ -120,7 +107,7 @@ async function serveStatic(req, res) {
 function summarizeRequests(requests) {
   const active = requests.filter((request) => request.status !== "Resolved");
   const open = active.length;
-  const urgent = active.filter((request) => ["Emergency", "High"].includes(request.urgency)).length;
+  const urgent = active.filter(isUrgent).length;
   const ready = active.filter((request) => ["Needs manager review", "Ready for approval", "Awaiting landlord quote review", "Quote ready for landlord"].includes(request.status)).length;
   const pending = active.filter((request) => request.completeness !== "Ready").length;
   return { open, urgent, ready, pending, total: requests.length };
@@ -145,19 +132,8 @@ async function handleChat(req, res) {
   store.sessions[sessionId] = result.session;
 
   if (result.request) {
-    const existingIndex = store.requests.findIndex((request) => request.id === result.request.id);
-    if (existingIndex >= 0) {
-      store.requests[existingIndex] = mergeWorkOrder(store.requests[existingIndex], result.request);
-    } else {
-      store.requests.unshift(result.request);
-    }
-
-    store.activity.unshift({
-      id: randomUUID(),
-      timestamp: new Date().toISOString(),
-      type: "request",
-      text: `${result.request.urgency} ${result.request.category.toLowerCase()} work order created for ${result.request.address || "unknown address"}.`,
-    });
+    upsertRequest(store, result.request);
+    logActivity(store, "request", `${result.request.urgency} ${result.request.category.toLowerCase()} work order created for ${result.request.address || "unknown address"}.`);
   }
 
   await writeStore(store);
@@ -170,7 +146,7 @@ async function handleRequests(req, res) {
     requests: store.requests,
     summary: summarizeRequests(store.requests),
     landlordSettings: store.landlordSettings,
-    activity: store.activity.slice(0, 12),
+    activity: store.activity.slice(0, ACTIVITY_SHOWN),
   });
 }
 
@@ -205,13 +181,7 @@ async function handleRequestPatch(req, res, requestId) {
     if (vendor) request.vendor = vendor;
   }
   request.updatedAt = new Date().toISOString();
-
-  store.activity.unshift({
-    id: randomUUID(),
-    timestamp: new Date().toISOString(),
-    type: "status",
-    text: `${request.reference} moved to ${request.status}.`,
-  });
+  logActivity(store, "status", `${request.reference} moved to ${request.status}.`);
 
   await writeStore(store);
   sendJson(res, 200, { request });
@@ -229,49 +199,37 @@ async function handleDispatchContractors(req, res, requestId) {
     return;
   }
 
-  const urgent = ["Emergency", "High"].includes(request.urgency);
+  const urgent = isUrgent(request);
   if (request.confirmedContractor || request.status === "Resolved") {
     return sendError(res, 409, "This job is already confirmed or resolved.");
   }
   if (request.completeness !== "Ready") {
     return sendError(res, 409, "Collect the tenant's details, photos and access approval before preparing outreach.");
   }
+  // Outreach is prepared once per job; a second call returns what is already there.
   if (request.contractorDispatches?.length) return sendJson(res, 200, { request });
   const vendors = getTopVendorsForCategory(request.category, 3);
+  const contactNow = urgent || !store.landlordSettings.reviewRoutineQuotes;
+  request.status = contactNow ? "Contractors contacted" : "Awaiting landlord quote review";
 
-  if (!urgent && store.landlordSettings.reviewRoutineQuotes) {
-    request.status = "Awaiting landlord quote review";
-  } else {
-    request.status = "Contractors contacted";
-  }
-
-  const existingVendorIds = new Set((request.contractorDispatches || []).map((dispatch) => dispatch.vendor.id));
-  const newDispatches = vendors
-    .filter((vendor) => !existingVendorIds.has(vendor.id))
-    .map((vendor) => ({
-      id: randomUUID(),
-      vendor,
-      channel: "WhatsApp",
-      status: urgent || !store.landlordSettings.reviewRoutineQuotes ? "Contacted" : "Prepared",
-      quoteAmount: null,
-      eta: "",
-      contractorNote: "",
-      message: buildContractorMessage(request, vendor),
-      contactedAt: urgent || !store.landlordSettings.reviewRoutineQuotes ? new Date().toISOString() : null,
-      respondedAt: null,
-    }));
-
-  request.contractorDispatches = [...(request.contractorDispatches || []), ...newDispatches];
+  request.contractorDispatches = vendors.map((vendor) => ({
+    id: randomUUID(),
+    vendor,
+    channel: "WhatsApp",
+    status: contactNow ? "Contacted" : "Prepared",
+    quoteAmount: null,
+    eta: "",
+    contractorNote: "",
+    message: buildContractorMessage(request, vendor),
+    contactedAt: contactNow ? new Date().toISOString() : null,
+    respondedAt: null,
+  }));
   request.updatedAt = new Date().toISOString();
 
-  store.activity.unshift({
-    id: randomUUID(),
-    timestamp: new Date().toISOString(),
-    type: "dispatch",
-    text: urgent
-      ? `${request.reference}: simulated WhatsApp contact to top ${newDispatches.length} ${request.category.toLowerCase()} contractors.`
-      : `${request.reference}: prepared ${newDispatches.length} WhatsApp contractor quote requests for landlord review.`,
-  });
+  const count = request.contractorDispatches.length;
+  logActivity(store, "dispatch", urgent
+    ? `${request.reference}: simulated WhatsApp contact to top ${count} ${request.category.toLowerCase()} contractors.`
+    : `${request.reference}: prepared ${count} WhatsApp contractor quote requests for landlord review.`);
 
   await writeStore(store);
   sendJson(res, 200, { request });
@@ -288,7 +246,7 @@ async function handleContractorResponse(req, res, requestId) {
     return;
   }
 
-  if (request.confirmedContractor || request.status === "Resolved" || !["Contacted", "Prepared", "Accepted"].includes(dispatch.status)) {
+  if (request.confirmedContractor || request.status === "Resolved" || !OPEN_DISPATCH_STATUSES.includes(dispatch.status)) {
     return sendError(res, 409, "This contractor request is already closed.");
   }
   if (!["accept", "decline"].includes(payload.outcome)) {
@@ -304,10 +262,9 @@ async function handleContractorResponse(req, res, requestId) {
   dispatch.contractorNote = String(payload.contractorNote || "");
   dispatch.respondedAt = new Date().toISOString();
 
-  const urgent = ["Emergency", "High"].includes(request.urgency);
   const canAutoAccept =
     accepted &&
-    urgent &&
+    isUrgent(request) &&
     store.landlordSettings.autoAcceptUrgent &&
     dispatch.quoteAmount > 0 &&
     dispatch.quoteAmount <= store.landlordSettings.autoAcceptLimit;
@@ -321,12 +278,7 @@ async function handleContractorResponse(req, res, requestId) {
   }
 
   request.updatedAt = new Date().toISOString();
-  store.activity.unshift({
-    id: randomUUID(),
-    timestamp: new Date().toISOString(),
-    type: "contractor",
-    text: `${dispatch.vendor.name} ${accepted ? `accepted ${request.reference} at £${dispatch.quoteAmount}` : `declined ${request.reference}`}.`,
-  });
+  logActivity(store, "contractor", `${dispatch.vendor.name} ${accepted ? `accepted ${request.reference} at £${dispatch.quoteAmount}` : `declined ${request.reference}`}.`);
 
   await writeStore(store);
   sendJson(res, 200, { request });
@@ -351,13 +303,7 @@ async function handleConfirmContractor(req, res, requestId) {
   }
   confirmDispatch(request, dispatch, "Landlord confirmed");
   request.updatedAt = new Date().toISOString();
-
-  store.activity.unshift({
-    id: randomUUID(),
-    timestamp: new Date().toISOString(),
-    type: "confirm",
-    text: `${request.reference}: ${dispatch.vendor.name} confirmed and other contractor requests closed.`,
-  });
+  logActivity(store, "confirm", `${request.reference}: ${dispatch.vendor.name} confirmed and other contractor requests closed.`);
 
   await writeStore(store);
   sendJson(res, 200, { request });
@@ -375,7 +321,7 @@ function confirmDispatch(request, dispatch, confirmationMode) {
   request.status = "Contractor confirmed";
   request.contractorDispatches = (request.contractorDispatches || []).map((item) => {
     if (item.id === dispatch.id) return { ...item, status: "Confirmed" };
-    if (["Contacted", "Prepared", "Accepted"].includes(item.status)) return { ...item, status: "Unsuccessful" };
+    if (OPEN_DISPATCH_STATUSES.includes(item.status)) return { ...item, status: "Unsuccessful" };
     return item;
   });
 }
@@ -383,31 +329,13 @@ function confirmDispatch(request, dispatch, confirmationMode) {
 async function handleReset(req, res) {
   const store = await readStore();
   store.sessions["demo-tenant"] = resetSession("demo-tenant");
-  store.activity.unshift({
-    id: randomUUID(),
-    timestamp: new Date().toISOString(),
-    type: "system",
-    text: "Tenant chat simulator reset.",
-  });
+  logActivity(store, "system", "Tenant chat simulator reset.");
   await writeStore(store);
   sendJson(res, 200, { session: store.sessions["demo-tenant"] });
 }
 
 async function handleResetDemo(req, res) {
-  const store = {
-    sessions: {},
-    requests: [],
-    landlordSettings: defaultLandlordSettings,
-    activity: [
-      {
-        id: randomUUID(),
-        timestamp: new Date().toISOString(),
-        type: "system",
-        text: "Demo data cleared.",
-      },
-    ],
-  };
-  await writeStore(store);
+  await writeStore(emptyStore("Demo data cleared."));
   sendJson(res, 200, { ok: true });
 }
 
@@ -443,11 +371,7 @@ async function handleTelegramWebhook(req, res) {
   });
 
   store.sessions[sessionId] = result.session;
-  if (result.request) {
-    const existingIndex = store.requests.findIndex((request) => request.id === result.request.id);
-    if (existingIndex >= 0) store.requests[existingIndex] = mergeWorkOrder(store.requests[existingIndex], result.request);
-    else store.requests.unshift(result.request);
-  }
+  if (result.request) upsertRequest(store, result.request);
   await writeStore(store);
 
   sendJson(res, 200, {
@@ -490,7 +414,7 @@ async function router(req, res) {
   }
 }
 
-await ensureStore();
+await storeFile.ensure();
 // Serialize dashboard mutations so simultaneous approvals cannot overwrite each other.
 let mutationQueue = Promise.resolve();
 const server = http.createServer((req, res) => {
@@ -504,7 +428,7 @@ const server = http.createServer((req, res) => {
 function listen(port, attempts = 0) {
   const onError = (error) => {
     server.removeListener("listening", onListening);
-    if (error.code === "EADDRINUSE" && attempts < 20) {
+    if (error.code === "EADDRINUSE" && attempts < PORT_ATTEMPTS) {
       listen(port + 1, attempts + 1);
       return;
     }

@@ -33,6 +33,7 @@ Collect tenant maintenance issues through chat, ask for missing details, classif
 
 - `executions/triage-engine.mjs`: deterministic intake, field extraction, classification, vendor routing, and message drafting.
 - `server.mjs`: local dashboard API and web app server.
+- `executions/store.mjs`: the JSON work order store, shared by the server and the Telegram bot.
 - `executions/telegram-polling-bot.mjs`: optional Telegram connector.
 
 ## Business Rules
