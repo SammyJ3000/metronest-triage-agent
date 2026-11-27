@@ -6,6 +6,8 @@ I built MetroNest as a demo of an AI agent that takes a tenant's repair message 
 
 ![MetroNest landlord dashboard showing a triaged kitchen leak with the tenant conversation, all fictional demo data](docs/images/preview.png)
 
+*Screenshots use fictional demo data.*
+
 ## What it is
 
 A tenant reports a problem in plain words, often messy ones. The agent asks for the details that are missing, one question at a time. It then sorts the job by trade and urgency, suggests contractors and drafts the messages. A person on the landlord side reviews it and decides what happens next. Nothing is booked, sent or paid for without that person.
