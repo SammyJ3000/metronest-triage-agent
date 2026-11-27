@@ -60,7 +60,7 @@ The intake collects six things: what is wrong, the tenant's name, the address, w
 
 **No tools, so the model cannot act.** The prompt states the model has no tools to book visits, contact contractors or approve quotes, and the code gives it none. It can only suggest field updates and a reply. Contractor contact and quote approval live in the server and the dashboard, behind a person.
 
-**The app decides, not the model.** Photo counts come from real Telegram attachments, not from a tenant saying "I sent them". Access permission only changes if the model quotes the tenant's latest message as evidence, and a bare "yes" only counts when the tenant was asked about access. Whether a report is complete is worked out from the required fields, not from what the model claims.
+**The app decides, not the model.** Photo counts come from real Telegram attachments, not from a tenant saying "I sent them". The one exception is a demo shortcut for web chat, which is off unless you turn it on (see below). Access permission only changes if the model quotes the tenant's latest message as evidence, and a bare "yes" only counts when the tenant was asked about access. Whether a report is complete is worked out from the required fields, not from what the model claims.
 
 **Rules fallback on failure or timeout.** If there is no API key, the provider fails, the call takes longer than 15 seconds or the output is invalid, the rules based intake takes over. The demo runs fully without any key. Set `METRONEST_LLM_ENABLED=false` to force rules only.
 
@@ -121,15 +121,18 @@ curl -X POST http://127.0.0.1:4173/api/chat \
   -d '{"sessionId":"demo","message":"The kitchen sink is leaking into the cabinet"}'
 ```
 
-Photos only count when they arrive as Telegram attachments, so a report sent this way stops at the photo step. That is on purpose.
+Web chat cannot attach files, and photos only count when they arrive as Telegram attachments, so a report sent this way stops at the photo step. That is on purpose.
+
+For a demo without Telegram you can start the server with `METRONEST_DEMO_TEXT_PHOTOS=1`. This is a demo shortcut only: in web chat, a message such as "I have sent 3 photos" then counts as three photos. It is off by default and never applies to Telegram.
 
 ### Optional: dashboard screenshot
 
-`executions/screenshot-dashboard.mjs` seeds a sample request and saves a screenshot to `tmp/`. It needs Playwright:
+`executions/screenshot-dashboard.mjs` seeds a sample request through web chat and saves a screenshot to `tmp/`. The seeded report only gets past the photo step with the demo shortcut, so start the server with it on. It needs Playwright:
 
 ```bash
 npm install
 npx playwright install chromium
+METRONEST_DEMO_TEXT_PHOTOS=1 npm start      # in one terminal
 DASHBOARD_URL=http://127.0.0.1:4173 node executions/screenshot-dashboard.mjs
 ```
 

@@ -38,7 +38,7 @@ before(async () => {
   }));
   child = spawn(process.execPath, ["server.mjs"], {
     cwd: root,
-    env: { ...process.env, PORT: "0", METRONEST_STORE_PATH: storePath, METRONEST_LLM_ENABLED: "false" },
+    env: { ...process.env, PORT: "0", METRONEST_STORE_PATH: storePath, METRONEST_LLM_ENABLED: "false", METRONEST_DEMO_TEXT_PHOTOS: "0" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   base = await new Promise((resolve, reject) => {
@@ -95,4 +95,21 @@ test("resolved jobs are not counted as open, urgent or ready", async () => {
   assert.equal(summary.open, 0);
   assert.equal(summary.urgent, 0);
   assert.equal(summary.ready, 0);
+});
+
+test("a web chat report stops at the photo step when photos are only mentioned", async () => {
+  let reply;
+  for (const message of [
+    "The kitchen sink is leaking and water is getting into the cabinet.",
+    "Yes, it is actively dripping right now.",
+    "Please use my saved access notes for this repair.",
+    "I have sent 3 photos of the leak, the cabinet and the wider kitchen.",
+  ]) {
+    reply = await call("/api/chat", "POST", { sessionId: "web-photos", message });
+    assert.equal(reply.status, 200);
+  }
+  assert.equal(reply.data.request.source, "Web chat");
+  assert.equal(reply.data.request.photoCount, 0);
+  assert.deepEqual(reply.data.missingFields, ["photos"]);
+  assert.equal((await call(`/api/requests/${reply.data.request.id}/dispatch`, "POST")).status, 409);
 });

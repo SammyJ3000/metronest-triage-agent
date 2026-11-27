@@ -4,6 +4,7 @@ import { createInitialSession, getTopVendorsForCategory, processTenantMessage } 
 
 // This suite exercises the offline rules; it must never spend API credits.
 delete process.env.OPENAI_API_KEY;
+delete process.env.METRONEST_DEMO_TEXT_PHOTOS;
 
 const jamieProfile = {
   id: "jamie-example",
@@ -204,4 +205,34 @@ test("an unknown tenant is asked for the issue first", async () => {
   const result = await processTenantMessage(createInitialSession("unknown-tenant"), "I have an issue", { llm: false });
   assert.equal(result.session.lastAskedField, "issueDescription");
   assert.match(result.reply, /What's the problem/);
+});
+
+// Web chat has no attachments, so a report sent there should stop at the photo step.
+async function webChatAtPhotoStep() {
+  let result = await processTenantMessage(createInitialSession("web-photos"), "The kitchen sink is leaking and water is getting into the cabinet.", { tenantProfile: jamieProfile });
+  for (const message of ["Yes, it is actively dripping right now.", "Please use my saved access notes for this repair."]) {
+    result = await processTenantMessage(result.session, message, { tenantProfile: jamieProfile });
+  }
+  assert.equal(result.session.lastAskedField, "photos");
+  return result.session;
+}
+
+test("web chat does not count photos the tenant only mentions in text", async () => {
+  const result = await processTenantMessage(await webChatAtPhotoStep(), "I have sent 3 photos of the leak, the cabinet and the wider kitchen.", { tenantProfile: jamieProfile });
+  assert.equal(result.request.photoCount, 0);
+  assert.equal(result.request.completeness, "Needs info");
+  assert.deepEqual(result.missingFields, ["photos"]);
+});
+
+test("the demo text photo shortcut counts them only when switched on, and never for Telegram", async (t) => {
+  process.env.METRONEST_DEMO_TEXT_PHOTOS = "1";
+  t.after(() => { delete process.env.METRONEST_DEMO_TEXT_PHOTOS; });
+
+  const web = await processTenantMessage(await webChatAtPhotoStep(), "I have sent 3 photos of the leak, the cabinet and the wider kitchen.", { tenantProfile: jamieProfile });
+  assert.equal(web.request.photoCount, 3);
+  assert.equal(web.request.photoStatus, "3 photos noted");
+  assert.equal(web.request.completeness, "Ready");
+
+  const telegram = await processTenantMessage(await webChatAtPhotoStep(), "I have sent 3 photos", { tenantProfile: jamieProfile, source: "Telegram" });
+  assert.equal(telegram.request.photoCount, 0);
 });

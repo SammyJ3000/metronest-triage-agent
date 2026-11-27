@@ -58,6 +58,11 @@ async function seedDashboard() {
   const data = await api("/api/requests");
   const request = data.requests[0];
   if (!request) return;
+  // Web chat cannot attach photos. The seeded report only completes when the server runs
+  // with the demo shortcut that counts photos mentioned in text.
+  if (request.completeness !== "Ready") {
+    throw new Error("The seeded report is still waiting for photos. Start the server with METRONEST_DEMO_TEXT_PHOTOS=1 to take this screenshot.");
+  }
 
   await api(`/api/requests/${request.id}/dispatch`, { method: "POST" });
   const dispatched = await api("/api/requests");

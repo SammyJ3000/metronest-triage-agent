@@ -324,7 +324,7 @@ function mergeExtractedFields(fields, message, options) {
     }
     fields.photoCount = fields.photos.length;
     fields.photoStatus = `${fields.photoCount} photo${fields.photoCount === 1 ? "" : "s"} received`;
-  } else if (options.source !== "Telegram" && !options.replaying && /\b(?:sent|attached|uploaded)\s+(?:the\s+)?[1-9]\s*(?:photo|image|picture)/i.test(lower)) {
+  } else if (textPhotosAllowed(options) && /\b(?:sent|attached|uploaded)\s+(?:the\s+)?[1-9]\s*(?:photo|image|picture)/i.test(lower)) {
     const explicitCount = Number(message.match(/\b([1-9])\s*(?:photo|image|picture)/i)?.[1] || 1);
     for (let index = 0; index < explicitCount; index += 1) {
       fields.photos.push({
@@ -336,6 +336,13 @@ function mergeExtractedFields(fields, message, options) {
     fields.photoCount = fields.photos.length;
     fields.photoStatus = `${fields.photoCount} photo${fields.photoCount === 1 ? "" : "s"} noted`;
   }
+}
+
+// Web chat cannot attach files, so a web report normally stops at the photo step.
+// METRONEST_DEMO_TEXT_PHOTOS=1 is a demo shortcut that counts "I have sent 3 photos" as photos.
+// Telegram reports only ever count real attachments.
+function textPhotosAllowed(options) {
+  return process.env.METRONEST_DEMO_TEXT_PHOTOS === "1" && options.source !== "Telegram" && !options.replaying;
 }
 
 function looksLikeAccessResponse(message, fields = {}) {
