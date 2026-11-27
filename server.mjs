@@ -370,48 +370,6 @@ async function handleResetDemo(req, res) {
   sendJson(res, 200, { ok: true });
 }
 
-async function handleTelegramWebhook(req, res) {
-  const update = await parseJson(req);
-  const message = update?.message?.text || update?.message?.caption || "";
-  const chatId = update?.message?.chat?.id;
-  const photoCount = update?.message?.photo?.length ? 1 : 0;
-
-  if ((!message && !photoCount) || !chatId) {
-    sendJson(res, 200, { ok: true, ignored: true });
-    return;
-  }
-
-  if (message.trim().startsWith("/start")) {
-    sendJson(res, 200, {
-      method: "sendMessage",
-      chat_id: chatId,
-      text: "Hi, you are through to MetroNest maintenance. Tell me what has happened and I will get the right details over to the property manager.",
-    });
-    return;
-  }
-
-  const store = await readStore();
-  const sessionId = `telegram-${chatId}`;
-  const session = store.sessions[sessionId] || createInitialSession(sessionId);
-  const tenantProfile = await getDefaultTenantProfile();
-  const result = await processTenantMessage(session, message, {
-    tenantName: tenantProfile?.name || update.message.from?.first_name,
-    tenantProfile,
-    source: "Telegram",
-    photoCount,
-  });
-
-  store.sessions[sessionId] = result.session;
-  if (result.request) upsertRequest(store, result.request);
-  await writeStore(store);
-
-  sendJson(res, 200, {
-    method: "sendMessage",
-    chat_id: chatId,
-    text: result.reply,
-  });
-}
-
 async function router(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -423,7 +381,6 @@ async function router(req, res) {
     if (req.method === "GET" && url.pathname === "/api/requests") return await handleRequests(req, res);
     if (req.method === "PATCH" && url.pathname === "/api/settings") return await handleSettingsPatch(req, res);
     if (req.method === "GET" && url.pathname === "/api/vendors") return sendJson(res, 200, { vendors: getVendors() });
-    if (req.method === "POST" && url.pathname === "/api/telegram/webhook") return await handleTelegramWebhook(req, res);
 
     const requestMatch = url.pathname.match(/^\/api\/requests\/([^/]+)$/);
     if (requestMatch && req.method === "PATCH") return await handleRequestPatch(req, res, requestMatch[1]);
