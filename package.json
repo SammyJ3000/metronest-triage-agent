@@ -1,5 +1,5 @@
 {
-  "name": "property-maintenance-triage-agent",
+  "name": "metronest-triage-agent",
   "version": "0.1.0",
   "private": true,
   "type": "module",
