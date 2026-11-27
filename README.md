@@ -6,11 +6,11 @@ I built MetroNest as a demo of an AI agent that takes a tenant's repair message 
 
 ![MetroNest landlord dashboard showing a triaged kitchen leak with the tenant conversation, all fictional demo data](docs/images/preview.png)
 
-*Screenshots use fictional demo data.*
+*Screenshots use fictional demo data. They were taken on the rules fallback with no API key, so every assistant reply shown is a fixed rules phrase, not model output. The report got past the photo step through the web chat demo shortcut that counts photos mentioned in text (see "Without Telegram" below).*
 
 ## What it is
 
-A tenant reports a problem in plain words, often messy ones. The agent asks for the details that are missing, one question at a time. It then sorts the job by trade and urgency, suggests contractors and drafts the messages. A person on the landlord side reviews it and decides what happens next. Nothing is booked, sent or paid for without that person.
+A tenant reports a problem in plain words, often messy ones. The agent asks for the details that are missing, one question at a time. It then sorts the job by trade and urgency, suggests contractors and drafts the messages. A person on the landlord side reviews it and decides what happens next. Nothing is booked, sent or paid for without that person. The one exception is a setting to auto approve urgent quotes under a limit. It is off by default and only works once a person turns it on and sets the limit.
 
 There are three parts:
 
@@ -58,9 +58,11 @@ The intake collects six things: what is wrong, the tenant's name, the address, w
 
 **Strict structured output.** The model must reply in a fixed JSON schema with no extra fields. The app then checks every field again before it uses any of it. If the output does not fit, it is thrown away.
 
-**No tools, so the model cannot act.** The prompt states the model has no tools to book visits, contact contractors or approve quotes, and the code gives it none. It can only suggest field updates and a reply. Contractor contact and quote approval live in the server and the dashboard, behind a person.
+**No tools, so the model cannot act.** The prompt (`prompts/intake.md`) states the model has no tools to book visits, contact contractors or approve quotes, and the code gives it none. It can only suggest field updates and a reply. Contractor contact and quote approval live in the server and the dashboard, behind a person.
 
 **The app decides, not the model.** Photo counts come from real Telegram attachments, not from a tenant saying "I sent them". The one exception is a demo shortcut for web chat, which is off unless you turn it on (see below). Access permission only changes if the model quotes the tenant's latest message as evidence, and a bare "yes" only counts when the tenant was asked about access. Whether a report is complete is worked out from the required fields, not from what the model claims.
+
+**Why OpenAI here.** I used the OpenAI Responses API for its structured outputs with a strict JSON schema. My other repos use Claude. The model is set by `OPENAI_MODEL`.
 
 **Rules fallback on failure or timeout.** If there is no API key, the provider fails, the call takes longer than 15 seconds or the output is invalid, the rules based intake takes over. The demo runs fully without any key. Set `METRONEST_LLM_ENABLED=false` to force rules only.
 
@@ -70,7 +72,7 @@ The intake collects six things: what is wrong, the tenant's name, the address, w
 
 ## What broke and how I fixed it
 
-These come from the project's own run logs.
+Most of these come from the project's own run logs. The slow model one came from a code review.
 
 **The bot asked the same question again and again.** A tenant sent "i have an issue", then "the pwoer is out", then "no". The parser took the vague first message as the description, missed the typo, and needed a risk keyword even for a "no". I kept vague openers out of the description, mapped common misspellings of power and electricity for sorting while keeping the tenant's own words, and read yes or no against the question actually asked. If an answer still makes no sense after one clarifying question, the chat is flagged for the manager with the transcript.
 
@@ -84,7 +86,7 @@ These come from the project's own run logs.
 
 ## Setup
 
-You need Node 18 or newer. The server, bot and tests use only built in Node modules.
+You need Node 22 or newer. The server, bot and tests use only built in Node modules.
 
 ```bash
 git clone <this repo>
@@ -93,13 +95,13 @@ cp .env.example .env     # optional, see below
 npm start
 ```
 
-Open the address the server prints, usually http://127.0.0.1:4173. The landlord dashboard is at `/dashboard` and a small product page is at `/`.
+Open the address the server prints, usually http://127.0.0.1:4173. The landlord dashboard is at `/dashboard` and a small mock product page is at `/`. The figures on that page are illustrative, not measured.
 
 The work order store is written to `data/maintenance-store.json` on first run.
 
 ### Optional: conversational intake
 
-Put an OpenAI key in `.env` as `OPENAI_API_KEY`. `OPENAI_MODEL` defaults to `gpt-4.1-mini`. Restart the server and the bot after changing `.env`. `/api/health` shows whether the key is set and how the last call went.
+Put an OpenAI key in `.env` as `OPENAI_API_KEY`. The model is configurable with `OPENAI_MODEL` and defaults to `gpt-4.1-mini`. Restart the server and the bot after changing `.env`. `/api/health` shows whether the key is set and how the last call went.
 
 ### Optional: Telegram tenant bot
 
@@ -144,14 +146,14 @@ DASHBOARD_URL=http://127.0.0.1:4173 node executions/screenshot-dashboard.mjs
 npm test
 ```
 
-This runs `triage-engine.test.mjs`, `server.test.mjs` and `llm-intake.test.mjs`. The tests need no install. The server test starts its own copy of the server on a free port with a temporary store, so it does not touch your demo data. No test makes a network call to OpenAI or Telegram, and none needs a key. The "LLM intake fallback" lines in the output are expected; they come from the tests that check failure handling.
+This runs the named `node:test` tests in `executions/*.test.mjs`: the triage rules, the server API and the LLM adapter. The tests need no install. The server tests start their own copy of the server on a free port with a temporary store, so they do not touch your demo data. They cover the web chat photo step, the 1 MB body limit, two confirmations at once, and a stand in slow model (`executions/fixtures/slow-model.mjs`) that must not hold up the dashboard. No test makes a network call to OpenAI or Telegram, and none needs a key. The "LLM intake fallback" lines in the output are expected; they come from the tests that check failure handling.
 
 ```bash
 npm install
 npm run lint
 ```
 
-`npm run lint` checks the code with ESLint, which is a dev dependency. GitHub Actions runs the lint and the tests on every push and pull request.
+`npm run lint` checks the code with ESLint, which is a dev dependency. GitHub Actions runs the lint, the tests and the rules version of the intake evals on Node 22 for every push and pull request.
 
 ## Intake evals
 
@@ -175,7 +177,9 @@ executions/telegram-polling-bot.mjs
 executions/store.mjs           the JSON store, shared by the server and the bot
 executions/env.mjs             loads .env
 executions/*.test.mjs          tests
-resources/                     fictional tenants and demo scenarios
+prompts/intake.md              the system prompt for the LLM intake
+evals/intake/                  intake eval cases and runner
+resources/                     fictional tenants, contractors and demo scenarios
 directives/                    the workflow rules the agent follows
 planning/                      scope and dashboard notes
 ```
@@ -184,6 +188,8 @@ planning/                      scope and dashboard notes
 
 Node.js with no runtime dependencies, plain HTML, CSS and JavaScript for the dashboard, the OpenAI Responses API for intake, the Telegram Bot API for tenant chat, and a JSON file for storage. Playwright is only used for screenshots, and ESLint for linting.
 
+This repo was published from a private working copy, so earlier history is not included.
+
 ## About me
 
-I'm Sam Jordan. I design and build apps and AI tools with Claude Code. More of my work: https://sam-jordan-cv.vercel.app
+I'm Sam Jordan. I design and build apps and AI tools. More of my work: https://sam-jordan-cv.vercel.app
