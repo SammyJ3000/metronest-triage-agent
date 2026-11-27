@@ -1,0 +1,56 @@
+[
+  {
+    "id": "leaking-sink-opening",
+    "note": "Primary demo scenario. Plumbing, high urgency, and nothing approved yet.",
+    "messages": ["Hi, my name is Jamie Example. The kitchen sink is leaking and water is getting into the cabinet."],
+    "expect": { "category": "Plumbing", "urgency": "High", "accessPermission": "", "photoCount": 0, "completeness": "Needs info" }
+  },
+  {
+    "id": "sparking-sockets",
+    "note": "Secondary demo scenario. Sparking is an emergency.",
+    "messages": ["This is Riley. The power points in the bedroom are sparking when I plug anything in."],
+    "expect": { "category": "Electrical", "urgency": "Emergency", "accessPermission": "" }
+  },
+  {
+    "id": "vague-opener-then-typo",
+    "note": "The chat that used to loop: a vague opener, then a misspelt fault.",
+    "messages": ["i have an issue", "the pwoer is out"],
+    "expect": { "category": "Electrical", "urgency": "High", "lastAskedField": "activeRisk" }
+  },
+  {
+    "id": "no-to-risk",
+    "note": "A bare no to the risk question records no active danger and moves on to access.",
+    "messages": ["the power is out in the kitchen", "no"],
+    "expect": { "activeRiskSet": true, "accessPermission": "", "lastAskedField": "accessPermission" }
+  },
+  {
+    "id": "yes-to-risk-is-not-access",
+    "note": "A yes to the risk question must not approve the saved access notes.",
+    "messages": ["the power is out", "yes"],
+    "expect": { "activeRiskSet": true, "accessPermission": "" }
+  },
+  {
+    "id": "category-only-is-not-a-description",
+    "note": "It's electrical is a category, not a description, so the issue is asked for again.",
+    "messages": ["I have an issue", "it's an electrical problem"],
+    "expect": { "issueDescription": "", "lastAskedField": "issueDescription" }
+  },
+  {
+    "id": "photos-claimed-in-text",
+    "note": "Saying photos were sent is not an upload. The report stays at the photo step.",
+    "messages": [
+      "The bathroom tap is leaking badly",
+      "Yes, it is leaking right now",
+      "Yeah just make sure the contractor messages me before",
+      "I have sent 3 photos"
+    ],
+    "expect": { "category": "Plumbing", "photoCount": 0, "completeness": "Needs info", "lastAskedField": "photos" }
+  },
+  {
+    "id": "asks-for-a-person",
+    "note": "A request for a person hands the chat to the manager.",
+    "modelOnly": true,
+    "messages": ["The front door lock is broken", "Can I speak to a person please?"],
+    "expect": { "status": "Needs manager review" }
+  }
+]

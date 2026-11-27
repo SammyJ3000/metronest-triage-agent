@@ -22,3 +22,5 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
+      # The intake eval cases need a key for the model; in CI they run on the rules fallback.
+      - run: npm run eval:intake -- --rules

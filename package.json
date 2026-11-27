@@ -8,7 +8,8 @@
     "start": "node server.mjs",
     "telegram": "node executions/telegram-polling-bot.mjs",
     "lint": "eslint .",
-    "test": "node --test executions/*.test.mjs"
+    "test": "node --test executions/*.test.mjs",
+    "eval:intake": "node evals/intake/run.mjs"
   },
   "engines": {
     "node": ">=22"

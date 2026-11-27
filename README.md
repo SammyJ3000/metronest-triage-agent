@@ -153,6 +153,17 @@ npm run lint
 
 `npm run lint` checks the code with ESLint, which is a dev dependency. GitHub Actions runs the lint and the tests on every push and pull request.
 
+## Intake evals
+
+`evals/intake/cases.json` holds eight short tenant conversations taken from the demo scenarios: a leaking sink, sparking sockets, a vague opener with a typo, yes and no answers to the risk question, a category with no description, photos claimed in text, and a tenant asking for a person. Each case checks what the app decides (trade, urgency, access, photo count, completeness), not the wording of the reply. The replies are printed so I can read them.
+
+```bash
+npm run eval:intake              # uses OPENAI_API_KEY and spends a little credit; skips cleanly without a key
+npm run eval:intake -- --rules   # the same cases on the rules fallback, no key needed
+```
+
+CI runs the rules version on every push. The model version only runs when I run it by hand with a key.
+
 ## Project layout
 
 ```
