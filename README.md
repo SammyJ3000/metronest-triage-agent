@@ -4,6 +4,8 @@
 
 I built MetroNest as a demo of an AI agent that takes a tenant's repair message and turns it into a work order a property manager can act on. It is a portfolio piece, not a live client product. MetroNest is a made up company. Every tenant, landlord, address, contractor and phone number in this repo is fictional.
 
+![MetroNest landlord dashboard showing a triaged kitchen leak with the tenant conversation, all fictional demo data](docs/images/preview.png)
+
 ## What it is
 
 A tenant reports a problem in plain words, often messy ones. The agent asks for the details that are missing, one question at a time. It then sorts the job by trade and urgency, suggests contractors and drafts the messages. A person on the landlord side reviews it and decides what happens next. Nothing is booked, sent or paid for without that person.
@@ -15,6 +17,12 @@ There are three parts:
 3. A small Node server that holds the work orders and runs the triage.
 
 Contractor outreach is simulated. No real contractor is ever contacted.
+
+## Screenshots
+
+The same request further down: the triage summary, the rough price and the first contractor quote waiting for the landlord to confirm.
+
+![MetroNest request detail with triage summary, rough price and an accepted contractor quote of £520](docs/images/dispatch.png)
 
 ## How it works
 
