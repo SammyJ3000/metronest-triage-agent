@@ -1,6 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import http from "node:http";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -112,4 +113,23 @@ test("a web chat report stops at the photo step when photos are only mentioned",
   assert.equal(reply.data.request.photoCount, 0);
   assert.deepEqual(reply.data.missingFields, ["photos"]);
   assert.equal((await call(`/api/requests/${reply.data.request.id}/dispatch`, "POST")).status, 409);
+});
+
+test("a request body over 1 MB is refused with 413", async () => {
+  const oversized = { sessionId: "too-big", message: "x".repeat(1024 * 1024) };
+  const response = await call("/api/chat", "POST", oversized);
+  assert.equal(response.status, 413);
+
+  // A chunked upload has no content length, so the limit is enforced while reading.
+  const chunkedStatus = await new Promise((resolve, reject) => {
+    const upload = http.request(`${base}/api/chat`, { method: "POST", headers: { "content-type": "application/json" } }, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    });
+    upload.on("error", reject);
+    for (let index = 0; index < 20; index += 1) upload.write("x".repeat(64 * 1024));
+    upload.end();
+  });
+  assert.equal(chunkedStatus, 413);
+  assert.equal((await call("/api/health")).status, 200);
 });

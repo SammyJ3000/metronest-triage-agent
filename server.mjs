@@ -27,6 +27,8 @@ const PORT_ATTEMPTS = 20;
 const ACTIVITY_SHOWN = 12;
 const URGENT_LEVELS = ["Emergency", "High"];
 const OPEN_DISPATCH_STATUSES = ["Contacted", "Prepared", "Accepted"];
+// Largest JSON request body the API accepts. Real requests are a few hundred bytes.
+const MAX_BODY_BYTES = 1024 * 1024;
 
 const defaultLandlordSettings = {
   autoAcceptUrgent: false,
@@ -63,9 +65,38 @@ async function readStore() {
 
 const isUrgent = (request) => URGENT_LEVELS.includes(request.urgency);
 
+class BodyTooLargeError extends Error {}
+
+// Reads the request body up to MAX_BODY_BYTES. Anything bigger is refused with 413;
+// the rest of the upload is drained and discarded so the response can still be sent.
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    if (Number(req.headers["content-length"]) > MAX_BODY_BYTES) {
+      req.resume();
+      reject(new BodyTooLargeError());
+      return;
+    }
+    const chunks = [];
+    let size = 0;
+    let tooLarge = false;
+    req.on("data", (chunk) => {
+      if (tooLarge) return;
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        tooLarge = true;
+        chunks.length = 0;
+        reject(new BodyTooLargeError());
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
 async function parseJson(req) {
-  let body = "";
-  for await (const chunk of req) body += chunk;
+  const body = await readBody(req);
   if (!body.trim()) return {};
   return JSON.parse(body);
 }
@@ -409,6 +440,7 @@ async function router(req, res) {
     if (req.method === "GET") return await serveStatic(req, res);
     notFound(res);
   } catch (error) {
+    if (error instanceof BodyTooLargeError) return sendError(res, 413, "Request body is too large.");
     console.error(error);
     sendError(res, error instanceof SyntaxError ? 400 : 500, error instanceof SyntaxError ? "Invalid JSON request." : "Couldn't complete the request. Please try again.");
   }
